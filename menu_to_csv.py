@@ -170,11 +170,16 @@ def json_to_csv(data: dict, out_csv_path: Path):
         writer.writerow(["星期", "餐點名稱", "價格"])
         writer.writerows(rows)
 
-    # 同時在專案目錄儲存一份 menu.json (供網頁端 fetch 自動載入)
+    # 同時在專案目錄儲存一份 menu.json (包含更新時間戳記，供網頁端比對與自動載入)
+    import time
     project_dir = Path(__file__).parent
     out_json_path = project_dir / "menu.json"
+    payload = {
+        "updatedAt": int(time.time() * 1000),
+        "menu": data
+    }
     with open(out_json_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(payload, f, ensure_ascii=False, indent=2)
 
     return len(rows), out_json_path
 

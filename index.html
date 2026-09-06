@@ -518,6 +518,7 @@ function getDefaultWeekday() {
 // ===================== STATE =====================
 let state = {
   weeklyMenu: { 1:[], 2:[], 3:[], 4:[], 5:[] },
+  menuUpdatedAt: 0,
   orders: [],
   seatCount: 30,
   cutoffTime: '12:00',
@@ -817,6 +818,7 @@ function addMenuItem() {
     id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
     name, price
   });
+  state.menuUpdatedAt = Date.now();
   saveState();
   closeModal('add-item-modal');
   renderMenuList();
@@ -833,6 +835,7 @@ function editItem(id) {
   if (isNaN(price)) return;
   item.name = name.trim() || item.name;
   item.price = price;
+  state.menuUpdatedAt = Date.now();
   saveState();
   renderMenuList();
   updateStats();
@@ -842,6 +845,7 @@ function removeItem(id) {
   if (!confirm('確定刪除此餐點？')) return;
   state.weeklyMenu[state.selectedAdminDay] = (state.weeklyMenu[state.selectedAdminDay] || []).filter(m => m.id !== id);
   state.orders = state.orders.filter(o => !(o.dayOfWeek === state.selectedAdminDay && o.mealId === id));
+  state.menuUpdatedAt = Date.now();
   saveState();
   renderMenuList();
   renderAdminOrders();
@@ -1042,6 +1046,7 @@ function parseCSVMenu(text, fileName, status) {
     totalAdded++;
   }
 
+  state.menuUpdatedAt = Date.now();
   saveState();
   renderMenuList();
   updateStats();
@@ -1065,9 +1070,20 @@ async function fetchOnlineMenu() {
     // 加上 timestamp 防止瀏覽器快取舊菜單
     const res = await fetch('./menu.json?t=' + Date.now());
     if (!res.ok) return;
-    const onlineMenu = await res.json();
-    if (onlineMenu && (onlineMenu[1] || onlineMenu["週一"] || onlineMenu["monday"])) {
-      // 轉換成週一至週五標準格式 (1~5)
+    const onlineData = await res.json();
+    if (!onlineData) return;
+
+    // 支援直接是菜單物件，或是包含 timestamp 的封裝物件 { updatedAt: ..., menu: ... }
+    const onlineUpdatedAt = Number(onlineData.updatedAt) || 0;
+    const onlineMenu = onlineData.menu || onlineData;
+
+    // 如果本機手動編輯的時間比線上的更新時間還新，優先保留本機手動修改
+    if (state.menuUpdatedAt && onlineUpdatedAt && state.menuUpdatedAt >= onlineUpdatedAt) {
+      return;
+    }
+
+    // 檢查線上菜單是否至少包含一個星期的資料
+    if (onlineMenu && (onlineMenu[1] || onlineMenu["週一"] || onlineMenu["monday"] || onlineMenu["1"])) {
       const mapped = { 1:[], 2:[], 3:[], 4:[], 5:[] };
       const dayKeys = {
         '1': 1, '週一': 1, '周一': 1, 'monday': 1,
@@ -1077,23 +1093,30 @@ async function fetchOnlineMenu() {
         '5': 5, '週五': 5, '周五': 5, 'friday': 5
       };
       
+      let hasValidItems = false;
       for (const [key, items] of Object.entries(onlineMenu)) {
         const d = dayKeys[key.toLowerCase ? key.toLowerCase() : key];
         if (d && Array.isArray(items)) {
-          mapped[d] = items.map(it => ({
+          mapped[d] = items.filter(it => it && it.name).map(it => ({
             id: it.id || (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString() + Math.random()),
             name: it.name,
             price: Number(it.price) || 0
           }));
+          if (mapped[d].length > 0) hasValidItems = true;
         }
       }
-      state.weeklyMenu = mapped;
-      saveState();
-      if (state.currentPage === 'user') renderUserPage();
-      if (state.currentPage === 'admin') renderAdminPage();
+
+      // 只有當線上菜單確實有餐點時才覆蓋本機；如果線上是空的不覆蓋本機
+      if (hasValidItems) {
+        state.weeklyMenu = mapped;
+        if (onlineUpdatedAt) state.menuUpdatedAt = onlineUpdatedAt;
+        saveState();
+        if (state.currentPage === 'user') renderUserPage();
+        if (state.currentPage === 'admin') renderAdminPage();
+      }
     }
   } catch (e) {
-    // 若沒有 menu.json 則維持使用 localStorage 內容
+    // 網路錯誤或檔案不存在時，安全維持使用 localStorage
   }
 }
 
