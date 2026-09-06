@@ -40,51 +40,124 @@ PROMPT_TEXT = """
 """
 
 def parse_with_gemini(api_key: str, file_path: Path) -> dict:
-    """使用 Google Gemini API (支援 PDF、圖片)"""
-    try:
-        from google import genai
-        from google.genai import types
-        client = genai.Client(api_key=api_key)
+    """使用 Google Gemini 原生 REST API (自動列舉可用模型並發送)"""
+    import urllib.request
+    import urllib.error
 
-        suffix = file_path.suffix.lower()
-        mime_type = "application/pdf" if suffix == ".pdf" else f"image/{suffix.replace('.', '')}"
-        if mime_type == "image/jpg":
-            mime_type = "image/jpeg"
+    suffix = file_path.suffix.lower()
+    mime_type = "application/pdf" if suffix == ".pdf" else f"image/{suffix.replace('.', '')}"
+    if mime_type == "image/jpg":
+        mime_type = "image/jpeg"
 
-        with open(file_path, "rb") as f:
-            file_bytes = f.read()
+    with open(file_path, "rb") as f:
+        b64_data = base64.b64encode(f.read()).decode("utf-8")
 
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[
-                types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
-                PROMPT_TEXT
-            ]
-        )
-        text = response.text.strip()
-    except ImportError:
+    req_body = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "inline_data": {
+                            "mime_type": mime_type,
+                            "data": b64_data
+                        }
+                    },
+                    {
+                        "text": PROMPT_TEXT
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.1
+        }
+    }
+
+    # 1. 查詢該 Key 真正支援的模型清單
+    available_models = []
+    for ver in ["v1beta", "v1"]:
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            req = urllib.request.Request(f"https://generativelanguage.googleapis.com/{ver}/models?key={api_key}")
+            with urllib.request.urlopen(req) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                for m in data.get("models", []):
+                    if "generateContent" in m.get("supportedGenerationMethods", []):
+                        # m["name"] 格式通常為 "models/gemini-..."
+                        name = m["name"]
+                        available_models.append((ver, name))
+        except Exception:
+            pass
 
-            suffix = file_path.suffix.lower()
-            mime_type = "application/pdf" if suffix == ".pdf" else f"image/{suffix.replace('.', '')}"
-            if mime_type == "image/jpg":
-                mime_type = "image/jpeg"
+    # 依優先順序排序: flash > pro
+    def score_model(item):
+        ver, name = item
+        score = 0
+    # 排除非視覺/非多模態模型 (如 tts, embedding, audio, imagen 等)
+    def is_vision_model(name: str) -> bool:
+        low = name.lower()
+        if any(bad in low for bad in ["-tts", "audio", "embed", "imagen", "search"]):
+            return False
+        return True
 
-            with open(file_path, "rb") as f:
-                file_bytes = f.read()
+    available_models = [m for m in available_models if is_vision_model(m[1])]
 
-            response = model.generate_content([
-                {"mime_type": mime_type, "data": file_bytes},
-                PROMPT_TEXT
-            ])
-            text = response.text.strip()
-        except ImportError:
-            raise RuntimeError("請先安裝 Gemini SDK: pip install google-genai 或 pip install google-generativeai")
+    # 依優先順序排序: 穩定正式版 flash 優先
+    def score_model(item):
+        ver, name = item
+        score = 0
+        if "flash" in name: score += 10
+        if "1.5" in name: score += 5
+        elif "2.0" in name: score += 4
+        if "latest" in name: score += 2
+        if "preview" in name: score -= 3
+        if ver == "v1": score += 2
+        return score
 
-    return clean_and_parse_json(text)
+    available_models.sort(key=score_model, reverse=True)
+
+    if not available_models:
+        # 若無法獲取列表，提供官方最通用的多模態模型
+        available_models = [
+            ("v1beta", "models/gemini-1.5-flash"),
+            ("v1", "models/gemini-1.5-flash"),
+            ("v1beta", "models/gemini-1.5-flash-latest"),
+            ("v1beta", "models/gemini-2.0-flash"),
+            ("v1beta", "models/gemini-1.5-pro")
+        ]
+
+    last_err = None
+    for ver, model_name in available_models:
+        url = f"https://generativelanguage.googleapis.com/{ver}/{model_name}:generateContent?key={api_key}"
+        print(f"👉 嘗試使用模型: {ver}/{model_name} ...")
+
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(req_body).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+
+        try:
+            with urllib.request.urlopen(req) as resp:
+                res_data = json.loads(resp.read().decode("utf-8"))
+                candidates = res_data.get("candidates", [])
+                if not candidates:
+                    raise RuntimeError("Gemini 未產生回應內容")
+                parts = candidates[0].get("content", {}).get("parts", [])
+                text = "".join([p.get("text", "") for p in parts])
+                return clean_and_parse_json(text)
+        except urllib.error.HTTPError as e:
+            err_msg = e.read().decode("utf-8", errors="ignore")
+            last_err = f"{ver}/{model_name} (HTTP {e.code}): {err_msg}"
+            # 只有在 API Key 本身無效 (403/API_KEY_INVALID) 才直接中止
+            if "API_KEY_INVALID" in err_msg or "API key not valid" in err_msg:
+                raise RuntimeError(f"API 金鑰無效：{err_msg}")
+            # 其它錯誤 (包含 400 該模型不吃圖片、404 模型未開放等) 繼續嘗試下一個候選模型
+            continue
+        except Exception as e:
+            last_err = str(e)
+            continue
+
+    raise RuntimeError(f"所有可用模型皆無法產生回應：\n{last_err}")
 
 def parse_with_claude(api_key: str, file_path: Path) -> dict:
     """使用 Anthropic Claude API"""

@@ -426,8 +426,12 @@
         <label>自動回報時間</label>
         <input type="time" id="report-time" value="12:00" oninput="saveSettings()">
       </div>
-      <div class="alert alert-warn">
-        ℹ️ 實際自動寄信需要後端伺服器。目前「立即發送回報」按鈕會顯示完整報告內容供複製。
+      <div class="field">
+        <label>Google 試算表 Web App 網址 (填寫後自動同步至雲端與自動寄信)</label>
+        <input type="text" id="google-sheet-url" placeholder="https://script.google.com/macros/s/.../exec" oninput="saveSettings()">
+      </div>
+      <div class="alert alert-info">
+        💡 填寫 Google 試算表 Web App 網址後，同仁在各手機點餐時會自動寫入雲端試算表，並由 Google 每日定時發送統計信件！
       </div>
     </div>
     <div class="card">
@@ -524,6 +528,7 @@ let state = {
   cutoffTime: '12:00',
   adminEmail: '',
   reportTime: '12:00',
+  googleSheetUrl: '',
   adminPassword: 'admin1234',
   currentPage: 'user',
   currentAdminTab: 'menu',
@@ -658,20 +663,34 @@ function submitOrder() {
   const item = activeMenu.find(m => m.id == mealId);
   if (!item) return;
 
-  state.orders = state.orders.filter(o => !(o.seat === seat && o.targetDateStr === target.dateStr));
-  state.orders.push({
+  const orderPayload = {
     id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
     targetDateStr: target.dateStr,
+    dayName: target.dayName,
     dayOfWeek: target.dayOfWeek,
     seat,
     mealId: item.id,
     mealName: item.name,
     price: item.price,
     time: new Date().toLocaleTimeString('zh-TW', {hour:'2-digit', minute:'2-digit'})
-  });
+  };
 
+  state.orders = state.orders.filter(o => !(o.seat === seat && o.targetDateStr === target.dateStr));
+  state.orders.push(orderPayload);
   state.orders.sort((a, b) => a.seat - b.seat);
   saveState();
+
+  // 若有設定 Google 試算表 Web App 網址，自動推送到雲端試算表
+  if (state.googleSheetUrl) {
+    try {
+      fetch(state.googleSheetUrl, {
+        method: 'POST',
+        mode: 'no-cors', // 避免跨網域 CORS 警告
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(orderPayload)
+      }).catch(err => console.log('雲端同步提示:', err));
+    } catch(e) {}
+  }
 
   document.getElementById('success-detail').textContent =
     `[${target.dayName} ${target.dateStr}] 座號 ${seat} — ${item.name}（$${item.price}）`;
@@ -697,6 +716,7 @@ function renderAdminPage() {
   document.getElementById('cutoff-time').value = state.cutoffTime;
   document.getElementById('admin-email').value = state.adminEmail || '';
   document.getElementById('report-time').value = state.reportTime || '12:00';
+  document.getElementById('google-sheet-url').value = state.googleSheetUrl || '';
 }
 
 function switchAdminTab(tab) {
@@ -819,6 +839,7 @@ function addMenuItem() {
     name, price
   });
   state.menuUpdatedAt = Date.now();
+  state.isManualMenu = true;
   saveState();
   closeModal('add-item-modal');
   renderMenuList();
@@ -836,6 +857,7 @@ function editItem(id) {
   item.name = name.trim() || item.name;
   item.price = price;
   state.menuUpdatedAt = Date.now();
+  state.isManualMenu = true;
   saveState();
   renderMenuList();
   updateStats();
@@ -846,6 +868,7 @@ function removeItem(id) {
   state.weeklyMenu[state.selectedAdminDay] = (state.weeklyMenu[state.selectedAdminDay] || []).filter(m => m.id !== id);
   state.orders = state.orders.filter(o => !(o.dayOfWeek === state.selectedAdminDay && o.mealId === id));
   state.menuUpdatedAt = Date.now();
+  state.isManualMenu = true;
   saveState();
   renderMenuList();
   renderAdminOrders();
@@ -862,6 +885,7 @@ function saveSettings() {
   state.cutoffTime = document.getElementById('cutoff-time').value;
   state.adminEmail = document.getElementById('admin-email').value;
   state.reportTime = document.getElementById('report-time').value;
+  state.googleSheetUrl = document.getElementById('google-sheet-url').value.trim();
   saveState();
 }
 
@@ -885,6 +909,8 @@ function clearSelectedDayOrders() {
 function clearWeeklyMenu() {
   if (!confirm('確定清除「週一至週五」菜單？')) return;
   state.weeklyMenu = { 1:[], 2:[], 3:[], 4:[], 5:[] };
+  state.isManualMenu = false;
+  state.menuUpdatedAt = Date.now();
   saveState();
   renderAdminPage();
 }
@@ -893,6 +919,8 @@ function fullReset() {
   if (!confirm('確定全部重置（包含菜單、訂單）？此操作不可復原。')) return;
   state.weeklyMenu = { 1:[], 2:[], 3:[], 4:[], 5:[] };
   state.orders = [];
+  state.isManualMenu = false;
+  state.menuUpdatedAt = 0;
   saveState();
   renderAdminPage();
 }
@@ -1028,7 +1056,7 @@ function parseCSVMenu(text, fileName, status) {
   for (let i = startIdx; i < lines.length; i++) {
     // Handle simple CSV (no quoted fields with commas)
     const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
-    if (cols.length < 3) { errorRows++; continues; }
+    if (cols.length < 3) { errorRows++; continue; }
 
     const dayNum = parseDayNumber(cols[0]);
     const name = cols[1].trim();
@@ -1047,6 +1075,7 @@ function parseCSVMenu(text, fileName, status) {
   }
 
   state.menuUpdatedAt = Date.now();
+  state.isManualMenu = true; // 鎖定保護：手動修改/上傳後，不受線上舊檔案影響
   saveState();
   renderMenuList();
   updateStats();
@@ -1077,8 +1106,8 @@ async function fetchOnlineMenu() {
     const onlineUpdatedAt = Number(onlineData.updatedAt) || 0;
     const onlineMenu = onlineData.menu || onlineData;
 
-    // 如果本機手動編輯的時間比線上的更新時間還新，優先保留本機手動修改
-    if (state.menuUpdatedAt && onlineUpdatedAt && state.menuUpdatedAt >= onlineUpdatedAt) {
+    // 如果本機已手動編輯過菜單，且線上的更新時間沒有更新，絕不覆蓋本機
+    if (state.isManualMenu && (!onlineUpdatedAt || state.menuUpdatedAt >= onlineUpdatedAt)) {
       return;
     }
 
