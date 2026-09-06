@@ -15,11 +15,11 @@ window.DEFAULT_CONFIG = {
   adminEmail: "",
 
   // 4. 自動回報時間
-  reportTime: "12:00",
+  reportTime: "23:10",
 
   // 5. Google 試算表 Web App 網址 (從 Google Apps Script 部署複製過來的網址)
   // 填寫後，所有同仁手機點餐時會自動將訂單送入此試算表，並由 Google 每日定時自動寄信！
-  googleSheetUrl: "",
+  googleSheetUrl: "https://script.google.com/macros/s/AKfycbynt_zo8sTAWHNrG6owp6qmEmcuRTTZ8aQwlS0Szu0hcFwzDYIAgE-6WXtGkYpVVzKi/exec",
 
   // 6. 維護端登入密碼
   adminPassword: "admin1234"
