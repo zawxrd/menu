@@ -12,10 +12,10 @@ window.DEFAULT_CONFIG = {
   cutoffTime: "12:00",
 
   // 3. 管理者 Email (多個請用逗號分隔)
-  adminEmail: "",
+  adminEmail: "vincenthuang0317@gmail.com",
 
   // 4. 自動回報時間
-  reportTime: "23:10",
+  reportTime: "23:20",
 
   // 5. Google 試算表 Web App 網址 (從 Google Apps Script 部署複製過來的網址)
   // 填寫後，所有同仁手機點餐時會自動將訂單送入此試算表，並由 Google 每日定時自動寄信！
