@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>點餐系統 - 週一至週五版</title>
+<script src="./config.js"></script>
 <style>
   :root {
     --bg: #F7F5F0;
@@ -411,22 +412,22 @@
       <div class="card-title">⚙️ 基本設定</div>
       <div class="field">
         <label>座位數量（1 起）</label>
-        <input type="number" id="seat-count" value="30" min="1" max="200" oninput="saveSeatCount()">
+        <input type="number" id="seat-count" min="1" max="200" placeholder="30">
       </div>
       <div class="field">
         <label>每日點餐截止時間（超過此時間開放隔天點餐）</label>
-        <input type="time" id="cutoff-time" value="12:00" oninput="saveSettings()">
+        <input type="time" id="cutoff-time">
       </div>
     </div>
     <div class="card">
       <div class="card-title">📧 自動回報設定</div>
       <div class="field">
         <label>管理者 Email（多個請用逗號分隔）</label>
-        <input type="email" id="admin-email" placeholder="admin@example.com" oninput="saveSettings()">
+        <input type="email" id="admin-email" placeholder="admin@example.com">
       </div>
       <div class="field">
         <label>自動回報時間</label>
-        <input type="time" id="report-time" value="12:00" oninput="saveSettings()">
+        <input type="time" id="report-time">
       </div>
       <div class="field">
         <label>Google 試算表 Web App 網址 (填寫後自動同步至雲端與自動寄信)</label>
@@ -569,14 +570,37 @@ function getActiveTarget() {
 }
 
 function loadState() {
+  // 1. 優先套用 config.js 中的預設設定 (若存在)
+  if (window.DEFAULT_CONFIG) {
+    if (window.DEFAULT_CONFIG.seatCount) state.seatCount = Number(window.DEFAULT_CONFIG.seatCount);
+    if (window.DEFAULT_CONFIG.cutoffTime) state.cutoffTime = String(window.DEFAULT_CONFIG.cutoffTime);
+    if (window.DEFAULT_CONFIG.adminEmail) state.adminEmail = String(window.DEFAULT_CONFIG.adminEmail);
+    if (window.DEFAULT_CONFIG.reportTime) state.reportTime = String(window.DEFAULT_CONFIG.reportTime);
+    if (window.DEFAULT_CONFIG.googleSheetUrl) state.googleSheetUrl = String(window.DEFAULT_CONFIG.googleSheetUrl);
+    if (window.DEFAULT_CONFIG.adminPassword) state.adminPassword = String(window.DEFAULT_CONFIG.adminPassword);
+  }
+
+  // 2. 合併使用者在瀏覽器修改過的 localStorage 設定
   try {
     const s = localStorage.getItem('orderSystemWeeklyState');
-    if (s) { const parsed = JSON.parse(s); state = { ...state, ...parsed }; }
+    if (s) {
+      const parsed = JSON.parse(s);
+      // 確保只合併有效值，不以空字串或 undefined 抹消既有設定
+      for (const key of Object.keys(parsed)) {
+        if (parsed[key] !== null && parsed[key] !== undefined && parsed[key] !== '') {
+          state[key] = parsed[key];
+        } else if (key === 'orders' || key === 'weeklyMenu') {
+          state[key] = parsed[key];
+        }
+      }
+    }
   } catch(e) {}
 }
 
 function saveState() {
-  try { localStorage.setItem('orderSystemWeeklyState', JSON.stringify(state)); } catch(e) {}
+  try {
+    localStorage.setItem('orderSystemWeeklyState', JSON.stringify(state));
+  } catch(e) {}
 }
 
 // ===================== NAV =====================
