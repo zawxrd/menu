@@ -430,11 +430,13 @@
       </div>
       <div class="field">
         <label>Google 試算表 Web App 網址 (填寫後自動同步至雲端與自動寄信)</label>
-        <input type="text" id="google-sheet-url" placeholder="https://script.google.com/macros/s/.../exec" oninput="saveSettings()">
+        <input type="text" id="google-sheet-url" placeholder="https://script.google.com/macros/s/.../exec">
       </div>
       <div class="alert alert-info">
         💡 填寫 Google 試算表 Web App 網址後，同仁在各手機點餐時會自動寫入雲端試算表，並由 Google 每日定時發送統計信件！
       </div>
+      <button class="btn btn-primary" onclick="saveAllSettings()" style="margin-top:10px">💾 儲存所有設定</button>
+      <span id="save-settings-msg" style="margin-left:12px;color:var(--success);font-weight:600;display:none">✅ 設定已儲存成功！</span>
     </div>
     <div class="card">
       <div class="card-title">🔐 更改管理密碼</div>
@@ -931,12 +933,30 @@ function saveSeatCount() {
   if (val > 0) { state.seatCount = val; saveState(); }
 }
 
-function saveSettings() {
-  state.cutoffTime = document.getElementById('cutoff-time').value;
-  state.adminEmail = document.getElementById('admin-email').value;
-  state.reportTime = document.getElementById('report-time').value;
-  state.googleSheetUrl = document.getElementById('google-sheet-url').value.trim();
+function saveAllSettings() {
+  const seat = parseInt(document.getElementById('seat-count').value);
+  if (seat > 0) state.seatCount = seat;
+  
+  const cutoff = document.getElementById('cutoff-time').value;
+  if (cutoff) state.cutoffTime = cutoff;
+
+  const email = document.getElementById('admin-email').value.trim();
+  state.adminEmail = email;
+
+  const reportTime = document.getElementById('report-time').value;
+  if (reportTime) state.reportTime = reportTime;
+
+  const sheetUrl = document.getElementById('google-sheet-url').value.trim();
+  state.googleSheetUrl = sheetUrl;
+
   saveState();
+
+  // 顯示儲存成功提示
+  const msg = document.getElementById('save-settings-msg');
+  if (msg) {
+    msg.style.display = 'inline';
+    setTimeout(() => { msg.style.display = 'none'; }, 3000);
+  }
 }
 
 function changePassword() {
@@ -1200,8 +1220,26 @@ async function fetchOnlineMenu() {
   }
 }
 
+function populateSettingsUI() {
+  const seatEl = document.getElementById('seat-count');
+  if (seatEl && state.seatCount) seatEl.value = state.seatCount;
+
+  const cutoffEl = document.getElementById('cutoff-time');
+  if (cutoffEl && state.cutoffTime) cutoffEl.value = state.cutoffTime;
+
+  const emailEl = document.getElementById('admin-email');
+  if (emailEl && state.adminEmail !== undefined) emailEl.value = state.adminEmail;
+
+  const reportEl = document.getElementById('report-time');
+  if (reportEl && state.reportTime) reportEl.value = state.reportTime;
+
+  const sheetEl = document.getElementById('google-sheet-url');
+  if (sheetEl && state.googleSheetUrl !== undefined) sheetEl.value = state.googleSheetUrl;
+}
+
 // ===================== INIT =====================
 loadState();
+populateSettingsUI(); // 啟動時立刻還原所有已儲存設定
 renderUserPage();
 fetchOnlineMenu(); // 自動同步線上最新菜單
 
