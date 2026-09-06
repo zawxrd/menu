@@ -378,13 +378,15 @@
     <div class="card">
       <div class="section-header">
         <span class="card-title" style="margin:0">📋 訂單檢視</span>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" onclick="syncOrdersFromCloud()">☁️ 載入雲端最新訂單</button>
           <button class="btn btn-secondary btn-sm" onclick="exportCSV()">📥 匯出 CSV</button>
           <button class="btn btn-success btn-sm" onclick="sendReport()">📧 立即發送回報</button>
         </div>
       </div>
 
       <div class="day-selector" id="admin-order-day-selector">
+        <button class="day-btn" onclick="selectAdminOrderDay(0)">全部</button>
         <button class="day-btn" onclick="selectAdminOrderDay(1)">週一</button>
         <button class="day-btn" onclick="selectAdminOrderDay(2)">週二</button>
         <button class="day-btn" onclick="selectAdminOrderDay(3)">週三</button>
@@ -751,15 +753,25 @@ function updateAdminDayButtons() {
 
 function updateAdminOrderDayButtons() {
   const btns = document.querySelectorAll('#admin-order-day-selector .day-btn');
-  [1,2,3,4,5].forEach((d, i) => btns[i].classList.toggle('active', d === state.selectedAdminOrderDay));
+  const days = [0, 1, 2, 3, 4, 5];
+  btns.forEach((btn, idx) => {
+    btn.classList.toggle('active', days[idx] === state.selectedAdminOrderDay);
+  });
+}
+
+function getFilteredOrders() {
+  if (state.selectedAdminOrderDay === 0) {
+    return state.orders; // 0 代表顯示全部
+  }
+  return state.orders.filter(o => o.dayOfWeek === state.selectedAdminOrderDay);
 }
 
 function updateStats() {
   const dayMenu = state.weeklyMenu[state.selectedAdminDay] || [];
   document.getElementById('stat-items').textContent = dayMenu.length;
-  const dayOrders = state.orders.filter(o => o.dayOfWeek === state.selectedAdminOrderDay);
-  document.getElementById('stat-orders').textContent = dayOrders.length;
-  document.getElementById('stat-revenue').textContent = '$' + dayOrders.reduce((s, o) => s + o.price, 0);
+  const filteredOrders = getFilteredOrders();
+  document.getElementById('stat-orders').textContent = filteredOrders.length;
+  document.getElementById('stat-revenue').textContent = '$' + filteredOrders.reduce((s, o) => s + o.price, 0);
 }
 
 function renderMenuList() {
@@ -781,15 +793,19 @@ function renderMenuList() {
 
 function renderAdminOrders() {
   const c = document.getElementById('admin-orders-container');
-  const filteredOrders = state.orders.filter(o => o.dayOfWeek === state.selectedAdminOrderDay);
+  const filteredOrders = getFilteredOrders();
+  const label = state.selectedAdminOrderDay === 0 ? "全部" : DAY_NAMES[state.selectedAdminOrderDay];
+
   if (filteredOrders.length === 0) {
-    c.innerHTML = `<div class="alert alert-info">${DAY_NAMES[state.selectedAdminOrderDay]} 尚無訂單紀錄。</div>`;
+    c.innerHTML = `<div class="alert alert-info">${label} 尚無訂單紀錄。</div>`;
     return;
   }
   c.innerHTML = `<table>
-    <thead><tr><th>座號</th><th>餐點</th><th>價格</th><th>訂購時間</th><th></th></tr></thead>
+    <thead><tr><th>預訂日期</th><th>星期</th><th>座號</th><th>餐點</th><th>價格</th><th>訂購時間</th><th></th></tr></thead>
     <tbody>${filteredOrders.map(o => `
       <tr>
+        <td style="color:var(--text-soft)">${o.targetDateStr || '—'}</td>
+        <td style="color:var(--text-soft)">${DAY_NAMES[o.dayOfWeek] || o.dayName || '—'}</td>
         <td><strong>${o.seat}</strong></td>
         <td>${o.mealName}</td>
         <td>$${o.price}</td>
@@ -801,7 +817,7 @@ function renderAdminOrders() {
 
 function renderMealStats() {
   const el = document.getElementById('meal-stats');
-  const filteredOrders = state.orders.filter(o => o.dayOfWeek === state.selectedAdminOrderDay);
+  const filteredOrders = getFilteredOrders();
   if (filteredOrders.length === 0) { el.innerHTML = '<div class="alert alert-info">尚無資料</div>'; return; }
   const counts = {};
   filteredOrders.forEach(o => { counts[o.mealName] = (counts[o.mealName] || 0) + 1; });
@@ -810,6 +826,40 @@ function renderMealStats() {
       <div class="menu-item-info"><div class="menu-item-name">${name}</div></div>
       <div style="font-weight:700;color:var(--accent)">${cnt} 份</div>
     </div>`).join('');
+}
+
+// ===================== CLOUD ORDER SYNC =====================
+async function syncOrdersFromCloud() {
+  if (!state.googleSheetUrl) {
+    alert("尚未設定 Google 試算表 Web App 網址！\n請先至「設定」頁面填寫。");
+    return;
+  }
+  try {
+    const res = await fetch(state.googleSheetUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const cloudOrders = await res.json();
+    if (Array.isArray(cloudOrders)) {
+      const dayKeys = { '週一': 1, '週二': 2, '週三': 3, '週四': 4, '週五': 5 };
+      state.orders = cloudOrders.map(o => ({
+        id: String(o.id || Math.random()),
+        targetDateStr: String(o.targetDateStr || ''),
+        dayName: String(o.dayName || ''),
+        dayOfWeek: Number(o.dayOfWeek) || dayKeys[o.dayName] || 1,
+        seat: Number(o.seat),
+        mealName: String(o.mealName),
+        price: Number(o.price) || 0,
+        time: String(o.time || '')
+      }));
+      state.orders.sort((a, b) => a.seat - b.seat);
+      saveState();
+      renderAdminOrders();
+      renderMealStats();
+      updateStats();
+      alert(`✅ 成功從 Google 試算表載入 ${state.orders.length} 筆最新訂單！`);
+    }
+  } catch (err) {
+    alert("❌ 載入雲端訂單失敗：" + err.message + "\n請確認 Google 試算表 Web App 部署權限是否設為「任何人 (Anyone)」。");
+  }
 }
 
 function cancelOrder(orderId) {
@@ -927,25 +977,26 @@ function fullReset() {
 
 // ===================== EXPORT & REPORT =====================
 function exportCSV() {
-  const filteredOrders = state.orders.filter(o => o.dayOfWeek === state.selectedAdminOrderDay);
-  if (filteredOrders.length === 0) { alert('目前該選擇日無訂單可匯出'); return; }
+  const filteredOrders = getFilteredOrders();
+  if (filteredOrders.length === 0) { alert('目前無訂單可匯出'); return; }
+  const label = state.selectedAdminOrderDay === 0 ? "全部訂單" : DAY_NAMES[state.selectedAdminOrderDay];
   let csv = '\uFEFF預訂日期,星期,座號,餐點,價格,時間\n';
   filteredOrders.forEach(o => {
-    csv += `"${o.targetDateStr}","${DAY_NAMES[o.dayOfWeek]}",${o.seat},"${o.mealName}",${o.price},${o.time}\n`;
+    csv += `"${o.targetDateStr}","${DAY_NAMES[o.dayOfWeek] || o.dayName || ''}",${o.seat},"${o.mealName}",${o.price},${o.time}\n`;
   });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8'}));
-  a.download = `訂單_${DAY_NAMES[state.selectedAdminOrderDay]}.csv`;
+  a.download = `訂單_${label}.csv`;
   a.click();
 }
 
 function sendReport() {
-  const filteredOrders = state.orders.filter(o => o.dayOfWeek === state.selectedAdminOrderDay);
-  const dayName = DAY_NAMES[state.selectedAdminOrderDay];
+  const filteredOrders = getFilteredOrders();
+  const label = state.selectedAdminOrderDay === 0 ? "全部訂單" : DAY_NAMES[state.selectedAdminOrderDay];
   const total = filteredOrders.reduce((s, o) => s + o.price, 0);
   const counts = {};
   filteredOrders.forEach(o => { counts[o.mealName] = (counts[o.mealName] || 0) + 1; });
-  let report = `📋 點餐統計回報 (${dayName})\n總訂單：${filteredOrders.length} 筆\n總金額：$${total}\n\n── 餐點統計 ──\n`;
+  let report = `📋 點餐統計回報 (${label})\n總訂單：${filteredOrders.length} 筆\n總金額：$${total}\n\n── 餐點統計 ──\n`;
   Object.entries(counts).sort((a,b) => b[1]-a[1]).forEach(([n, c]) => { report += `${n}：${c} 份\n`; });
   report += `\n── 詳細訂單 ──\n`;
   filteredOrders.forEach(o => {
@@ -954,7 +1005,7 @@ function sendReport() {
   document.getElementById('report-content').value = report;
   document.getElementById('report-modal').classList.add('show');
   if (state.adminEmail) {
-    const subject = encodeURIComponent(`點餐回報 ${dayName}`);
+    const subject = encodeURIComponent(`點餐回報 ${label}`);
     const body = encodeURIComponent(report);
     window.open(`mailto:${state.adminEmail}?subject=${subject}&body=${body}`);
   }
