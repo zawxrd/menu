@@ -380,7 +380,7 @@
       <div class="section-header">
         <span class="card-title" style="margin:0">📋 訂單檢視</span>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-primary btn-sm" onclick="syncOrdersFromCloud()">☁️ 載入雲端最新訂單</button>
+          <button class="btn btn-primary btn-sm" onclick="syncOrdersFromCloud(true)">☁️ 載入雲端最新訂單</button>
           <button class="btn btn-secondary btn-sm" onclick="exportCSV()">📥 匯出 CSV</button>
           <button class="btn btn-success btn-sm" onclick="sendReport()">📧 立即發送回報</button>
         </div>
@@ -611,7 +611,10 @@ function showPage(name) {
   document.querySelectorAll('.nav-tab')[name === 'user' ? 0 : 1].classList.add('active');
   state.currentPage = name;
   if (name === 'user') renderUserPage();
-  if (name === 'admin') renderAdminPage();
+  if (name === 'admin') {
+    renderAdminPage();
+    syncOrdersFromCloud(false); // 切換至維護端時自動靜默重整一次雲端最新訂單
+  }
 }
 
 function showAdminLogin() {
@@ -855,9 +858,33 @@ function renderMealStats() {
 }
 
 // ===================== CLOUD ORDER SYNC =====================
-async function syncOrdersFromCloud() {
+function cleanCloudDateStr(raw) {
+  if (!raw) return '';
+  const s = String(raw).trim();
+  if (s.includes('T')) {
+    const d = new Date(s);
+    if (!isNaN(d)) {
+      return d.toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
+    }
+  }
+  return s.split(' ')[0];
+}
+
+function cleanCloudTimeStr(raw) {
+  if (!raw) return '';
+  const s = String(raw).trim();
+  if (s.includes('T')) {
+    const d = new Date(s);
+    if (!isNaN(d)) {
+      return d.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+  }
+  return s;
+}
+
+async function syncOrdersFromCloud(isManual = false) {
   if (!state.googleSheetUrl) {
-    alert("尚未設定 Google 試算表 Web App 網址！\n請先至「設定」頁面填寫。");
+    if (isManual) alert("尚未設定 Google 試算表 Web App 網址！\n請先至「設定」頁面填寫。");
     return;
   }
   try {
@@ -866,25 +893,48 @@ async function syncOrdersFromCloud() {
     const cloudOrders = await res.json();
     if (Array.isArray(cloudOrders)) {
       const dayKeys = { '週一': 1, '週二': 2, '週三': 3, '週四': 4, '週五': 5 };
-      state.orders = cloudOrders.map(o => ({
-        id: String(o.id || Math.random()),
-        targetDateStr: String(o.targetDateStr || ''),
-        dayName: String(o.dayName || ''),
-        dayOfWeek: Number(o.dayOfWeek) || dayKeys[o.dayName] || 1,
-        seat: Number(o.seat),
-        mealName: String(o.mealName),
-        price: Number(o.price) || 0,
-        time: String(o.time || '')
-      }));
+      const map = {};
+
+      cloudOrders.forEach(o => {
+        const cleanDate = cleanCloudDateStr(o.targetDateStr);
+        const cleanTime = cleanCloudTimeStr(o.time);
+        const seatNum = Number(o.seat);
+        if (!cleanDate || !seatNum) return;
+
+        // 同一天同座號只保留一筆 (落實去重複)
+        map[`${cleanDate}_${seatNum}`] = {
+          id: String(o.id || Math.random()),
+          targetDateStr: cleanDate,
+          dayName: String(o.dayName || ''),
+          dayOfWeek: Number(o.dayOfWeek) || dayKeys[o.dayName] || 1,
+          seat: seatNum,
+          mealName: String(o.mealName),
+          price: Number(o.price) || 0,
+          time: cleanTime
+        };
+      });
+
+      state.orders = Object.values(map);
       state.orders.sort((a, b) => a.seat - b.seat);
       saveState();
-      renderAdminOrders();
-      renderMealStats();
-      updateStats();
-      alert(`✅ 成功從 Google 試算表載入 ${state.orders.length} 筆最新訂單！`);
+
+      if (state.currentPage === 'admin') {
+        renderAdminOrders();
+        renderMealStats();
+        updateStats();
+      }
+      if (state.currentPage === 'user') {
+        renderUserPage();
+      }
+
+      if (isManual) {
+        alert(`✅ 成功從 Google 試算表載入 ${state.orders.length} 筆最新訂單！`);
+      }
     }
   } catch (err) {
-    alert("❌ 載入雲端訂單失敗：" + err.message + "\n請確認 Google 試算表 Web App 部署權限是否設為「任何人 (Anyone)」。");
+    if (isManual) {
+      alert("❌ 載入雲端訂單失敗：" + err.message + "\n請確認 Google 試算表 Web App 部署權限是否設為「任何人 (Anyone)」。");
+    }
   }
 }
 
@@ -1266,6 +1316,7 @@ loadState();
 populateSettingsUI(); // 啟動時立刻還原所有已儲存設定
 renderUserPage();
 fetchOnlineMenu(); // 自動同步線上最新菜單
+syncOrdersFromCloud(false); // 🚀 每次進入網頁自動在背景載入雲端最新訂單
 
 setInterval(() => {
   if (state.currentPage === 'user') renderUserPage();
