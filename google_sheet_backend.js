@@ -1,22 +1,85 @@
 /**
- * 🍱 點餐系統 - Google Apps Script 後端與自動寄信服務 (修正版)
- * 解決問題：
- * 1. 修正日期與時間被試算表轉成 ISO 字串 (1899-12-30T... / UTC) 的問題
- * 2. 修正同座號同日期重複追加問題，落實覆蓋更新
+ * 🍱 點餐系統 - Google Apps Script 後端與全域雲端設定同步服務
+ * 支援功能：
+ * 1. 訂單即時寫入與同座號覆蓋
+ * 2. 系統設定（座位數、截止時間、管理Email、回報時間、管理密碼）雲端雙向同步
+ * 3. 每日定時自動發送訂單彙總 Email
  */
 
-// ===================== 基本設定 =====================
-const CONFIG = {
-  // 接收每日點餐回報的管理者 Email (多個請用逗號分隔)
-  ADMIN_EMAIL: "admin@example.com", 
-  // 試算表工作表名稱
-  SHEET_NAME: "訂單紀錄",
-  // 郵件主旨前綴
-  EMAIL_SUBJECT_PREFIX: "🍱 今日點餐統計回報"
-};
+// ===================== 基本常數 =====================
+const SHEET_ORDERS = "訂單紀錄";
+const SHEET_SETTINGS = "系統設定";
+const EMAIL_SUBJECT_PREFIX = "🍱 今日點餐統計回報";
 
 /**
- * 輔助函式：將任何日期/字串格式化為乾淨的 YYYY-MM-DD
+ * 取得或初始化「系統設定」工作表
+ */
+function getSettingsMap() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_SETTINGS);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_SETTINGS);
+    sheet.appendRow(["設定鍵值", "設定內容", "備註說明"]);
+    sheet.setFrozenRows(1);
+    // 寫入預設值
+    sheet.appendRow(["seatCount", "30", "座位數量"]);
+    sheet.appendRow(["cutoffTime", "12:00", "每日點餐截止時間 (HH:mm)"]);
+    sheet.appendRow(["adminEmail", "", "管理者 Email"]);
+    sheet.appendRow(["reportTime", "12:00", "自動回報時間 (HH:mm)"]);
+    sheet.appendRow(["adminPassword", "admin1234", "維護端登入密碼"]);
+  }
+
+  const rows = sheet.getDataRange().getValues();
+  const settings = {
+    seatCount: 30,
+    cutoffTime: "12:00",
+    adminEmail: "",
+    reportTime: "12:00",
+    adminPassword: "admin1234"
+  };
+
+  for (let i = 1; i < rows.length; i++) {
+    const key = String(rows[i][0]).trim();
+    const val = String(rows[i][1]).trim();
+    if (key && val !== undefined) {
+      if (key === "seatCount") settings[key] = Number(val) || 30;
+      else settings[key] = val;
+    }
+  }
+  return settings;
+}
+
+/**
+ * 儲存設定至「系統設定」工作表
+ */
+function saveSettingsToSheet(newSettings) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_SETTINGS);
+  if (!sheet) {
+    getSettingsMap();
+    sheet = ss.getSheetByName(SHEET_SETTINGS);
+  }
+
+  const rows = sheet.getDataRange().getValues();
+  const keys = Object.keys(newSettings);
+
+  for (const key of keys) {
+    let found = false;
+    for (let i = 1; i < rows.length; i++) {
+      if (String(rows[i][0]).trim() === key) {
+        sheet.getRange(i + 1, 2).setValue(String(newSettings[key]));
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      sheet.appendRow([key, String(newSettings[key]), "自訂設定"]);
+    }
+  }
+}
+
+/**
+ * 輔助函式：格式化日期為 YYYY-MM-DD
  */
 function normalizeDateStr(val) {
   if (!val) return "";
@@ -34,7 +97,7 @@ function normalizeDateStr(val) {
 }
 
 /**
- * 輔助函式：將任何時間格式化為乾淨的 HH:mm (24小時制)
+ * 輔助函式：格式化時間為 HH:mm
  */
 function normalizeTimeStr(val) {
   if (!val) return "";
@@ -52,20 +115,27 @@ function normalizeTimeStr(val) {
 }
 
 /**
- * 1. 處理網頁端 POST 請求 (點餐寫入與覆蓋)
+ * 1. 處理網頁端 POST 請求 (支援點餐寫入 OR 儲存系統設定)
  */
 function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    let sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
     
-    // 若工作表不存在則自動建立與初始化表頭
+    // 【模式 A】：儲存系統設定
+    if (data.action === "saveSettings") {
+      saveSettingsToSheet(data.settings || {});
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "設定已儲存至雲端" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 【模式 B】：點餐送出
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(SHEET_ORDERS);
+    
     if (!sheet) {
-      sheet = ss.insertSheet(CONFIG.SHEET_NAME);
+      sheet = ss.insertSheet(SHEET_ORDERS);
       sheet.appendRow(["訂單ID", "預訂日期", "星期", "座號", "餐點名稱", "價格", "訂購時間"]);
       sheet.setFrozenRows(1);
-      // 將預訂日期與訂購時間欄位設定為純文字格式，避免 Google 試算表自動轉換
       sheet.getRange("B:B").setNumberFormat("@");
       sheet.getRange("G:G").setNumberFormat("@");
     }
@@ -77,14 +147,13 @@ function doPost(e) {
 
     const rows = sheet.getDataRange().getValues();
 
-    // 檢查同一天、同座號是否已點餐；若有則覆蓋更新
+    // 檢查同日同座號，落實覆蓋更新
     let updated = false;
     for (let i = 1; i < rows.length; i++) {
       const rowDate = normalizeDateStr(rows[i][1]);
       const rowSeat = Number(rows[i][3]);
 
       if (rowDate === targetDate && rowSeat === seat) {
-        // 覆蓋舊資料
         sheet.getRange(i + 1, 1, 1, 7).setValues([[
           data.id || Utilities.getUuid(),
           targetDate,
@@ -99,7 +168,6 @@ function doPost(e) {
       }
     }
 
-    // 若為新訂單則追加一行
     if (!updated) {
       sheet.appendRow([
         data.id || Utilities.getUuid(),
@@ -122,44 +190,53 @@ function doPost(e) {
 }
 
 /**
- * 2. 處理網頁端 GET 請求 (取得整理後的訂單清單供後台同步)
+ * 2. 處理網頁端 GET 請求 (同時回傳訂單與雲端設定)
  */
 function doGet(e) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
-  if (!sheet) {
-    return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
-  }
+  const sheet = ss.getSheetByName(SHEET_ORDERS);
   
-  const rows = sheet.getDataRange().getValues();
-  const orderMap = {}; // 用於避免同一天同座號在試算表中有歷史殘留紀錄
+  // 1. 取得雲端設定
+  const settings = getSettingsMap();
 
-  for (let i = 1; i < rows.length; i++) {
-    const rawDate = rows[i][1];
-    const rawSeat = rows[i][3];
-    if (!rawDate || !rawSeat) continue;
+  // 2. 取得訂單紀錄
+  const cleanOrders = [];
+  if (sheet) {
+    const rows = sheet.getDataRange().getValues();
+    const orderMap = {};
 
-    const dateStr = normalizeDateStr(rawDate);
-    const seatNum = Number(rawSeat);
-    const timeStr = normalizeTimeStr(rows[i][6]);
+    for (let i = 1; i < rows.length; i++) {
+      const rawDate = rows[i][1];
+      const rawSeat = rows[i][3];
+      if (!rawDate || !rawSeat) continue;
 
-    const orderKey = dateStr + "_" + seatNum;
-    orderMap[orderKey] = {
-      id: String(rows[i][0] || Utilities.getUuid()),
-      targetDateStr: dateStr,
-      dayName: String(rows[i][2] || ''),
-      seat: seatNum,
-      mealName: String(rows[i][4] || ''),
-      price: Number(rows[i][5]) || 0,
-      time: timeStr
-    };
+      const dateStr = normalizeDateStr(rawDate);
+      const seatNum = Number(rawSeat);
+      const timeStr = normalizeTimeStr(rows[i][6]);
+
+      const orderKey = dateStr + "_" + seatNum;
+      orderMap[orderKey] = {
+        id: String(rows[i][0] || Utilities.getUuid()),
+        targetDateStr: dateStr,
+        dayName: String(rows[i][2] || ''),
+        seat: seatNum,
+        mealName: String(rows[i][4] || ''),
+        price: Number(rows[i][5]) || 0,
+        time: timeStr
+      };
+    }
+
+    Object.values(orderMap).forEach(o => cleanOrders.push(o));
+    cleanOrders.sort((a, b) => a.seat - b.seat);
   }
 
-  const cleanOrders = Object.values(orderMap);
-  // 依座號排序
-  cleanOrders.sort((a, b) => a.seat - b.seat);
+  // 同時打包回傳 orders 與 settings
+  const payload = {
+    orders: cleanOrders,
+    settings: settings
+  };
 
-  return ContentService.createTextOutput(JSON.stringify(cleanOrders))
+  return ContentService.createTextOutput(JSON.stringify(payload))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -168,8 +245,15 @@ function doGet(e) {
  */
 function sendDailySummaryEmail() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
+  const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return;
+
+  const settings = getSettingsMap();
+  const adminEmail = settings.adminEmail;
+  if (!adminEmail) {
+    console.log("未設定管理者 Email，略過寄信。");
+    return;
+  }
 
   const todayStr = Utilities.formatDate(new Date(), "Asia/Taipei", "yyyy-MM-dd");
   const rows = sheet.getDataRange().getValues();
@@ -197,14 +281,12 @@ function sendDailySummaryEmail() {
     return;
   }
 
-  // 統計總金額與份數
   const totalAmount = todayOrders.reduce((acc, cur) => acc + cur.price, 0);
   const counts = {};
   todayOrders.forEach(o => {
     counts[o.mealName] = (counts[o.mealName] || 0) + 1;
   });
 
-  // 組裝郵件內文
   let body = "📋 點餐統計回報 (" + todayStr + ")\n";
   body += "━━━━━━━━━━━━━━━━━━━━━━━\n";
   body += "總訂單數：" + todayOrders.length + " 筆\n";
@@ -224,10 +306,10 @@ function sendDailySummaryEmail() {
   body += "本信件由 Google 試算表點餐系統自動發送。";
 
   MailApp.sendEmail({
-    to: CONFIG.ADMIN_EMAIL,
-    subject: CONFIG.EMAIL_SUBJECT_PREFIX + " (" + todayStr + ") - 共 " + todayOrders.length + " 筆",
+    to: adminEmail,
+    subject: EMAIL_SUBJECT_PREFIX + " (" + todayStr + ") - 共 " + todayOrders.length + " 筆",
     body: body
   });
 
-  console.log("已成功發送今日訂單統計信件！");
+  console.log("已成功發送今日訂單統計信件至: " + adminEmail);
 }

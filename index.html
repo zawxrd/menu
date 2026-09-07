@@ -890,7 +890,22 @@ async function syncOrdersFromCloud(isManual = false) {
   try {
     const res = await fetch(state.googleSheetUrl);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const cloudOrders = await res.json();
+    const cloudData = await res.json();
+
+    const cloudOrders = Array.isArray(cloudData) ? cloudData : (cloudData.orders || []);
+    const cloudSettings = (!Array.isArray(cloudData) && cloudData.settings) ? cloudData.settings : null;
+
+    // 1. 同步雲端設定 (若存在)
+    if (cloudSettings) {
+      if (cloudSettings.seatCount) state.seatCount = Number(cloudSettings.seatCount);
+      if (cloudSettings.cutoffTime) state.cutoffTime = String(cloudSettings.cutoffTime);
+      if (cloudSettings.adminEmail !== undefined) state.adminEmail = String(cloudSettings.adminEmail);
+      if (cloudSettings.reportTime) state.reportTime = String(cloudSettings.reportTime);
+      if (cloudSettings.adminPassword) state.adminPassword = String(cloudSettings.adminPassword);
+      populateSettingsUI();
+    }
+
+    // 2. 同步訂單紀錄
     if (Array.isArray(cloudOrders)) {
       const dayKeys = { '週一': 1, '週二': 2, '週三': 3, '週四': 4, '週五': 5 };
       const map = {};
@@ -916,24 +931,25 @@ async function syncOrdersFromCloud(isManual = false) {
 
       state.orders = Object.values(map);
       state.orders.sort((a, b) => a.seat - b.seat);
-      saveState();
+    }
 
-      if (state.currentPage === 'admin') {
-        renderAdminOrders();
-        renderMealStats();
-        updateStats();
-      }
-      if (state.currentPage === 'user') {
-        renderUserPage();
-      }
+    saveState();
 
-      if (isManual) {
-        alert(`✅ 成功從 Google 試算表載入 ${state.orders.length} 筆最新訂單！`);
-      }
+    if (state.currentPage === 'admin') {
+      renderAdminOrders();
+      renderMealStats();
+      updateStats();
+    }
+    if (state.currentPage === 'user') {
+      renderUserPage();
+    }
+
+    if (isManual) {
+      alert(`✅ 成功從 Google 試算表同步！\n・訂單：${state.orders.length} 筆\n・雲端設定已成功載入！`);
     }
   } catch (err) {
     if (isManual) {
-      alert("❌ 載入雲端訂單失敗：" + err.message + "\n請確認 Google 試算表 Web App 部署權限是否設為「任何人 (Anyone)」。");
+      alert("❌ 載入雲端失敗：" + err.message + "\n請確認 Google 試算表 Web App 部署權限是否設為「任何人 (Anyone)」。");
     }
   }
 }
@@ -1007,6 +1023,28 @@ function saveSeatCount() {
   if (val > 0) { state.seatCount = val; saveState(); }
 }
 
+function pushSettingsToCloud() {
+  if (!state.googleSheetUrl) return;
+  const payload = {
+    action: "saveSettings",
+    settings: {
+      seatCount: state.seatCount,
+      cutoffTime: state.cutoffTime,
+      adminEmail: state.adminEmail,
+      reportTime: state.reportTime,
+      adminPassword: state.adminPassword
+    }
+  };
+  try {
+    fetch(state.googleSheetUrl, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).catch(e => console.log("雲端設定儲存提示:", e));
+  } catch(e) {}
+}
+
 function saveAllSettings() {
   const seat = parseInt(document.getElementById('seat-count').value);
   if (seat > 0) state.seatCount = seat;
@@ -1024,11 +1062,13 @@ function saveAllSettings() {
   state.googleSheetUrl = sheetUrl;
 
   saveState();
+  pushSettingsToCloud(); // 🚀 同步推送到 Google 試算表雲端
 
   // 顯示儲存成功提示
   const msg = document.getElementById('save-settings-msg');
   if (msg) {
     msg.style.display = 'inline';
+    msg.textContent = state.googleSheetUrl ? '✅ 設定已成功儲存並同步至雲端！' : '✅ 設定已儲存至本機！';
     setTimeout(() => { msg.style.display = 'none'; }, 3000);
   }
 }
@@ -1038,8 +1078,9 @@ function changePassword() {
   if (pw.length < 4) { alert('密碼至少 4 個字元'); return; }
   state.adminPassword = pw;
   saveState();
+  pushSettingsToCloud(); // 🚀 密碼也同步更新至雲端
   document.getElementById('new-password').value = '';
-  alert('密碼已更新！');
+  alert('密碼已更新，並同步至雲端！');
 }
 
 function clearSelectedDayOrders() {
