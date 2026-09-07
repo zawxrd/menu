@@ -143,6 +143,14 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
+    // 【模式 B】：由網頁立即觸發由雲端寄信
+    if (data.action === "sendEmailNow") {
+      const targetDate = data.targetDateStr ? normalizeDateStr(data.targetDateStr) : null;
+      const res = sendDailySummaryEmail(targetDate, true);
+      return ContentService.createTextOutput(JSON.stringify(res))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     // 【模式 B】：點餐送出
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     let sheet = ss.getSheetByName(SHEET_ORDERS);
@@ -256,64 +264,102 @@ function doGet(e) {
 }
 
 /**
- * 3. 每日定時自動寄信函式 (每天中午 12:00 觸發)
+ * 3. 每日定時自動寄信函式
+ * @param {string} customDateStr - 指定寄送日期 (YYYY-MM-DD)，若無則使用當日
+ * @param {boolean} isTest - 是否為測試/手動發送模式 (若當日無訂單，自動抓取最新紀錄測試發信)
  */
-function sendDailySummaryEmail() {
+function sendDailySummaryEmail(customDateStr, isTest) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(SHEET_ORDERS);
-  if (!sheet) return;
+  if (!sheet) {
+    console.error("❌ 找不到工作表「" + SHEET_ORDERS + "」");
+    return { status: "error", message: "找不到訂單工作表" };
+  }
 
   const settings = getSettingsMap();
   const adminEmail = settings.adminEmail;
   if (!adminEmail) {
-    console.log("未設定管理者 Email，略過寄信。");
-    return;
+    console.warn("⚠️ 未設定管理者 Email，略過寄信。請先至系統設定填寫 adminEmail。");
+    return { status: "error", message: "尚未設定管理者 Email" };
   }
 
-  const todayStr = Utilities.formatDate(new Date(), "Asia/Taipei", "yyyy-MM-dd");
+  const targetDateStr = customDateStr ? normalizeDateStr(customDateStr) : Utilities.formatDate(new Date(), "Asia/Taipei", "yyyy-MM-dd");
   const rows = sheet.getDataRange().getValues();
   
-  const todayMap = {};
+  const targetMap = {};
+  const allOrdersList = [];
+
   for (let i = 1; i < rows.length; i++) {
     const dateStr = normalizeDateStr(rows[i][1]);
     const seatNum = Number(rows[i][3]);
+    if (!dateStr || !seatNum) continue;
 
-    if (dateStr === todayStr && seatNum) {
-      todayMap[seatNum] = {
-        seat: seatNum,
-        mealName: String(rows[i][4]),
-        price: Number(rows[i][5]) || 0,
-        time: normalizeTimeStr(rows[i][6])
-      };
+    const orderObj = {
+      dateStr: dateStr,
+      seat: seatNum,
+      mealName: String(rows[i][4]),
+      price: Number(rows[i][5]) || 0,
+      time: normalizeTimeStr(rows[i][6])
+    };
+    allOrdersList.push(orderObj);
+
+    if (dateStr === targetDateStr) {
+      targetMap[seatNum] = orderObj;
     }
   }
 
-  const todayOrders = Object.values(todayMap);
-  todayOrders.sort((a, b) => a.seat - b.seat);
+  let finalOrders = Object.values(targetMap);
+  finalOrders.sort((a, b) => a.seat - b.seat);
+  let isFallbackTest = false;
 
-  if (todayOrders.length === 0) {
-    console.log("今日 (" + todayStr + ") 尚無訂單，略過寄信。");
-    return;
+  if (finalOrders.length === 0) {
+    if (isTest) {
+      // 測試模式下若今日無訂單，自動抓取最新一天的訂單寄出測試
+      if (allOrdersList.length > 0) {
+        allOrdersList.sort((a, b) => b.dateStr.localeCompare(a.dateStr));
+        const latestDate = allOrdersList[0].dateStr;
+        finalOrders = allOrdersList.filter(o => o.dateStr === latestDate);
+        finalOrders.sort((a, b) => a.seat - b.seat);
+        isFallbackTest = true;
+      } else {
+        // 試算表完全沒有任何訂單，發送系統連線成功驗證信
+        MailApp.sendEmail({
+          to: adminEmail,
+          subject: "【測試成功】點餐系統自動回報服務運作正常",
+          body: "您好！\n\n這是一封來自點餐系統的測試信件。\n代表您的 Google Apps Script Gmail 發信權限已順利授權，信件發送服務完全正常！\n\n目前試算表中尚無任何訂單紀錄，當有訂單時將會在自動回報時間發送每日統計。\n\n管理者 Email: " + adminEmail
+        });
+        console.log("✅ 已成功發送測試驗證信至: " + adminEmail);
+        return { status: "success", message: "已發送連線驗證信至 " + adminEmail };
+      }
+    } else {
+      console.log("今日 (" + targetDateStr + ") 尚無訂單，略過寄信。");
+      return { status: "skipped", message: "今日無訂單，略過寄信" };
+    }
   }
 
-  const totalAmount = todayOrders.reduce((acc, cur) => acc + cur.price, 0);
+  const sendDateStr = isFallbackTest ? finalOrders[0].dateStr + " (最新紀錄)" : targetDateStr;
+  const totalAmount = finalOrders.reduce((acc, cur) => acc + cur.price, 0);
   const counts = {};
-  todayOrders.forEach(o => {
+  const seats = {};
+  finalOrders.forEach(o => {
     counts[o.mealName] = (counts[o.mealName] || 0) + 1;
+    if (!seats[o.mealName]) seats[o.mealName] = [];
+    seats[o.mealName].push(o.seat);
   });
 
-  let body = "📋 點餐統計回報 (" + todayStr + ")\n";
+  let body = "📋 點餐統計回報 (" + sendDateStr + ")\n";
   body += "━━━━━━━━━━━━━━━━━━━━━━━\n";
-  body += "總訂單數：" + todayOrders.length + " 筆\n";
+  body += "總訂單數：" + finalOrders.length + " 筆\n";
   body += "總計金額：$" + totalAmount + " 元\n\n";
 
   body += "── 🍱 餐點數量統計 ──\n";
   Object.keys(counts).sort((a, b) => counts[b] - counts[a]).forEach(name => {
-    body += "・" + name + "：" + counts[name] + " 份\n";
+    const seatList = (seats[name] || []).sort((a, b) => a - b).join("、");
+    body += "・" + name + " (" + seatList + ") " + counts[name] + " 份\n";
   });
 
   body += "\n── 📝 座號詳細清單 ──\n";
-  todayOrders.forEach(o => {
+  finalOrders.forEach(o => {
     body += "座號 " + o.seat + " ➔ " + o.mealName + " ($" + o.price + ")\n";
   });
 
@@ -322,9 +368,55 @@ function sendDailySummaryEmail() {
 
   MailApp.sendEmail({
     to: adminEmail,
-    subject: EMAIL_SUBJECT_PREFIX + " (" + todayStr + ") - 共 " + todayOrders.length + " 筆",
+    subject: EMAIL_SUBJECT_PREFIX + " (" + sendDateStr + ") - 共 " + finalOrders.length + " 筆",
     body: body
   });
 
-  console.log("已成功發送今日訂單統計信件至: " + adminEmail);
+  console.log("✅ 已成功發送訂單統計信件至: " + adminEmail);
+  return { status: "success", message: "已成功發送信件至 " + adminEmail, count: finalOrders.length };
+}
+
+/**
+ * 4. 自動建立每日定時寄信觸發條件
+ * 在 Apps Script 編輯器上方選擇此函式並點擊「執行」，即可一鍵設定好排程！
+ */
+function setupDailyTrigger() {
+  // 1. 刪除既有的 sendDailySummaryEmail 觸發器，避免重複建立
+  const triggers = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "sendDailySummaryEmail") {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+
+  // 2. 讀取設定的自動回報時間 (預設 12:00)
+  const settings = getSettingsMap();
+  const reportTime = settings.reportTime || "12:00";
+  const hour = parseInt(reportTime.split(":")[0], 10) || 12;
+
+  // 3. 建立每日指定小時的定時觸發器
+  ScriptApp.newTrigger("sendDailySummaryEmail")
+    .timeBased()
+    .everyDays(1)
+    .atHour(hour)
+    .inTimezone("Asia/Taipei")
+    .create();
+
+  console.log("✅ 已成功建立每日定時回報觸發條件！預計每天 " + hour + ":00 ~ " + (hour + 1) + ":00 自動發送回報至 " + (settings.adminEmail || "（未設定 Email）"));
+  return "觸發條件建立成功（每日 " + hour + " 點執行）";
+}
+
+/**
+ * 5. 手動測試發送 Email 函式
+ * 在 Apps Script 編輯器上方選擇此函式並點擊「執行」，即可立即測試發信並完成 Gmail 授權！
+ */
+function testSendEmail() {
+  console.log("🚀 開始執行測試發信...");
+  const settings = getSettingsMap();
+  if (!settings.adminEmail) {
+    console.error("❌ 失敗：尚未設定 adminEmail！請先至網頁「設定」頁面填寫管理者 Email 並儲存。");
+    return;
+  }
+  const res = sendDailySummaryEmail(null, true);
+  console.log("執行結果：", res);
 }

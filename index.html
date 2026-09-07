@@ -522,8 +522,9 @@
     <div class="modal-title">📧 訂單回報</div>
     <div style="margin-bottom:12px;font-size:.8rem;color:var(--text-soft)">複製以下內容並發送至管理 Email：</div>
     <textarea id="report-content" style="min-height:220px;font-family:monospace;font-size:.8rem" readonly></textarea>
-    <div style="display:flex;gap:10px;margin-top:14px">
-      <button class="btn btn-primary" onclick="copyReport()" style="flex:1">📋 複製</button>
+    <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="copyReport()" style="flex:1">📋 複製內容</button>
+      <button class="btn btn-success" onclick="sendCloudEmailNow()" style="flex:1" id="cloud-email-btn">🚀 雲端發送 Email</button>
       <button class="btn btn-secondary" onclick="closeModal('report-modal')">關閉</button>
     </div>
   </div>
@@ -1224,6 +1225,46 @@ function copyReport() {
   } else {
     document.execCommand('copy');
     alert('已複製到剪貼簿！');
+  }
+}
+
+async function sendCloudEmailNow() {
+  if (!state.googleSheetUrl) {
+    alert("尚未設定 Google 試算表 Web App 網址！\n請至「設定」頁面填寫。");
+    return;
+  }
+  if (!state.adminEmail) {
+    alert("尚未填寫管理者 Email！\n請先至「設定」頁面填寫管理者 Email 並儲存。");
+    return;
+  }
+  const btn = document.getElementById('cloud-email-btn');
+  const oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ 發送中...';
+
+  try {
+    const filteredOrders = getFilteredOrders();
+    let targetDateStr = null;
+    if (filteredOrders.length > 0 && state.selectedAdminOrderDay !== 0) {
+      targetDateStr = filteredOrders[0].targetDateStr;
+    }
+    
+    await fetch(state.googleSheetUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'sendEmailNow',
+        targetDateStr: targetDateStr
+      })
+    });
+
+    alert(`✅ 已向 Google 試算表發出寄信指令！\n系統正由雲端發送至：${state.adminEmail}\n\n💡 提示：若第一次使用未收到，請先至 Google Apps Script 執行一次完成授權。`);
+  } catch(e) {
+    alert('寄信請求失敗：' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldText;
   }
 }
 
