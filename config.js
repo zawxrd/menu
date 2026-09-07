@@ -1,26 +1,15 @@
 /**
- * 🍱 點餐系統 - 全域預設設定檔 (System Configuration)
+ * 🍱 點餐系統 - 全域雲端連線設定檔 (config.js)
  * 
- * 部署至 GitHub Pages 時，你可以在此填妥預設設定。
- * 這樣任何同仁用自己的手機打開網頁時，就自動擁有連線設定，絕不消失！
+ * 💡 說明：
+ * 所有系統設定（座位數量、截止時間、管理者 Email、回報時間、管理密碼）
+ * 現已全部支援【Google 試算表雲端自動同步】！
+ * 
+ * 🚀 部署至 GitHub Pages 前：
+ * 請將你在 Google Apps Script 部署取得的「網路應用程式網址」填入下方的 googleSheetUrl。
+ * 這樣任何同仁用自己的手機打開網頁，就會自動連上雲端，同步所有最新設定與訂單！
  */
 window.DEFAULT_CONFIG = {
-  // 1. 座位數量 (預設 30)
-  seatCount: 30,
-
-  // 2. 每日點餐截止時間 (24小時制，超過此時間自動開放隔天/下週一預訂)
-  cutoffTime: "12:00",
-
-  // 3. 管理者 Email (多個請用逗號分隔)
-  adminEmail: "vincenthuang0317@gmail.com",
-
-  // 4. 自動回報時間
-  reportTime: "23:20",
-
-  // 5. Google 試算表 Web App 網址 (從 Google Apps Script 部署複製過來的網址)
-  // 填寫後，所有同仁手機點餐時會自動將訂單送入此試算表，並由 Google 每日定時自動寄信！
-  googleSheetUrl: "https://script.google.com/macros/s/AKfycbynt_zo8sTAWHNrG6owp6qmEmcuRTTZ8aQwlS0Szu0hcFwzDYIAgE-6WXtGkYpVVzKi/exec",
-
-  // 6. 維護端登入密碼
-  adminPassword: "admin1234"
+  // Google 試算表 Web App 網址 (必填，例如：https://script.google.com/macros/s/.../exec)
+  googleSheetUrl: "https://script.google.com/macros/s/AKfycbynt_zo8sTAWHNrG6owp6qmEmcuRTTZ8aQwlS0Szu0hcFwzDYIAgE-6WXtGkYpVVzKi/exec"
 };
