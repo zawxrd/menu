@@ -318,32 +318,34 @@ def main():
     else:
         out_csv = input_file.parent / f"{input_file.stem}_menu.csv"
 
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    claude_key = os.environ.get("ANTHROPIC_API_KEY")
+    KEY_FILE = Path(__file__).parent / ".gemini_api_key"
+    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not gemini_key and KEY_FILE.exists():
+        try:
+            gemini_key = KEY_FILE.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
 
-    if not gemini_key and not claude_key:
-        print("\n⚠️ 找不到 API 金鑰環境變數。")
-        print("請選擇你要使用的 API 並輸入金鑰：")
-        print("1. Google Gemini API (推薦)")
-        print("2. Anthropic Claude API")
-        choice = input("請輸入選項 (1 或 2): ").strip()
-        if choice == "2":
-            claude_key = input("請輸入 ANTHROPIC_API_KEY: ").strip()
-        else:
-            gemini_key = input("請輸入 GEMINI_API_KEY: ").strip()
+    if not gemini_key:
+        print("\n🔑 固定使用 Google Gemini 視覺識別模型。")
+        print("首次使用請輸入您的 GEMINI_API_KEY：")
+        print("（輸入後系統會自動安全儲存在本機，下次執行無需再輸入）")
+        gemini_key = input("👉 請輸入 GEMINI_API_KEY: ").strip()
+        if gemini_key:
+            try:
+                KEY_FILE.write_text(gemini_key, encoding="utf-8")
+                print("✅ API Key 已成功儲存於本機記憶檔！下次執行將自動讀取。")
+            except Exception as e:
+                print(f"⚠️ 無法寫入金鑰記憶檔: {e}")
 
-    print(f"\n🚀 正在解析檔案: {input_file.name} ...")
+    if not gemini_key:
+        print("❌ 未提供 Gemini API 金鑰，終止。")
+        return
+
+    print(f"\n🚀 正在使用 Google Gemini 解析檔案: {input_file.name} ...")
 
     try:
-        if gemini_key:
-            print("👉 使用 Google Gemini 進行視覺識別...")
-            result = parse_with_gemini(gemini_key, input_file)
-        elif claude_key:
-            print("👉 使用 Claude 進行視覺識別...")
-            result = parse_with_claude(claude_key, input_file)
-        else:
-            print("❌ 未提供任何 API 金鑰，終止。")
-            return
+        result = parse_with_gemini(gemini_key, input_file)
 
         count, json_file = json_to_csv(result, out_csv)
         print(f"\n🎉 轉換成功！共提取 {count} 項餐點。")

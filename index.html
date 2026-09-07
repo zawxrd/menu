@@ -385,8 +385,6 @@
       <span>⏰ 每日點餐截止：<strong id="admin-info-cutoff" style="color:var(--primary)">12:00</strong></span>
       <span style="color:var(--border)">|</span>
       <span>📢 自動回報時間：<strong id="admin-info-report" style="color:var(--success)">12:00</strong></span>
-      <span style="color:var(--border)">|</span>
-      <span>🪑 座位總數：<strong id="admin-info-seats" style="color:var(--text)">30</strong> 席</span>
     </div>
 
     <div class="card">
@@ -1474,9 +1472,6 @@ function populateSettingsUI() {
 
   const adminReport = document.getElementById('admin-info-report');
   if (adminReport) adminReport.textContent = state.reportTime;
-
-  const adminSeats = document.getElementById('admin-info-seats');
-  if (adminSeats) adminSeats.textContent = state.seatCount || 30;
 }
 
 // ===================== INIT =====================
