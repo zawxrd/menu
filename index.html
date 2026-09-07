@@ -1015,12 +1015,30 @@ async function syncOrdersFromCloud(isManual = false) {
 }
 
 function cancelOrder(orderId) {
+  const order = state.orders.find(o => o.id === orderId);
   if (!confirm('確定取消此筆訂單？')) return;
   state.orders = state.orders.filter(o => o.id !== orderId);
   saveState();
   renderAdminOrders();
   renderMealStats();
   updateStats();
+
+  // 同步從 Google 試算表刪除
+  if (state.googleSheetUrl && order) {
+    try {
+      fetch(state.googleSheetUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'deleteOrder',
+          id: orderId,
+          targetDateStr: order.targetDateStr,
+          seat: order.seat
+        })
+      }).catch(e => console.log('雲端刪除訂單提示:', e));
+    } catch(e) {}
+  }
 }
 
 // ===================== MENU MANAGEMENT =====================
@@ -1145,17 +1163,44 @@ function changePassword() {
 }
 
 function clearSelectedDayOrders() {
-  const dayName = DAY_NAMES[state.selectedAdminOrderDay];
-  if (!confirm(`確定清除 ${dayName} 的所有訂單？`)) return;
-  state.orders = state.orders.filter(o => o.dayOfWeek !== state.selectedAdminOrderDay);
+  const dayName = state.selectedAdminOrderDay === 0 ? "全部" : DAY_NAMES[state.selectedAdminOrderDay];
+  if (!confirm(`確定清除 ${dayName} 的訂單？`)) return;
+
+  const targetOrders = state.selectedAdminOrderDay === 0
+    ? state.orders
+    : state.orders.filter(o => o.dayOfWeek === state.selectedAdminOrderDay);
+  const targetDateStr = targetOrders.length > 0 ? targetOrders[0].targetDateStr : null;
+
+  if (state.selectedAdminOrderDay === 0) {
+    state.orders = [];
+  } else {
+    state.orders = state.orders.filter(o => o.dayOfWeek !== state.selectedAdminOrderDay);
+  }
+
   saveState();
   renderAdminPage();
+
+  // 同步通知 Google 試算表刪除
+  if (state.googleSheetUrl) {
+    try {
+      fetch(state.googleSheetUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: state.selectedAdminOrderDay === 0 ? 'clearAllOrders' : 'clearDayOrders',
+          dayOfWeek: state.selectedAdminOrderDay,
+          targetDateStr: targetDateStr
+        })
+      }).catch(e => console.log('雲端清除指定日訂單提示:', e));
+    } catch(e) {}
+  }
 }
 
 function clearWeeklyMenu() {
-  if (!confirm('確定清除「週一至週五」菜單？')) return;
+  if (!confirm('確定清除「週一至週五」全週菜單？')) return;
   state.weeklyMenu = { 1:[], 2:[], 3:[], 4:[], 5:[] };
-  state.isManualMenu = false;
+  state.isManualMenu = true; // 設為 true，保護空菜單不被線上 menu.json 再次覆蓋還原
   state.menuUpdatedAt = Date.now();
   saveState();
   renderAdminPage();
@@ -1165,10 +1210,22 @@ function fullReset() {
   if (!confirm('確定全部重置（包含菜單、訂單）？此操作不可復原。')) return;
   state.weeklyMenu = { 1:[], 2:[], 3:[], 4:[], 5:[] };
   state.orders = [];
-  state.isManualMenu = false;
-  state.menuUpdatedAt = 0;
+  state.isManualMenu = true; // 設為 true，保護空狀態不被線上 menu.json 覆蓋
+  state.menuUpdatedAt = Date.now();
   saveState();
   renderAdminPage();
+
+  // 同步清空 Google 試算表全部訂單
+  if (state.googleSheetUrl) {
+    try {
+      fetch(state.googleSheetUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'clearAllOrders' })
+      }).catch(e => console.log('雲端全部清空提示:', e));
+    } catch(e) {}
+  }
 }
 
 // ===================== EXPORT & REPORT =====================
