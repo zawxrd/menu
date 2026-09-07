@@ -278,6 +278,11 @@
       <span id="order-target-badge" class="chip chip-warn">載入中...</span>
     </div>
 
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:0.85rem;color:var(--text-soft);margin-top:10px;margin-bottom:14px;padding:8px 12px;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
+      <span>⏰ 每日點餐截止時間：<strong id="user-cutoff-display" style="color:var(--primary);font-size:0.95rem">12:00</strong></span>
+      <span style="font-size:0.8rem;color:var(--text-soft)">（逾時將自動開放預訂下一工作日）</span>
+    </div>
+
     <div id="user-menu-empty" class="alert alert-warn" style="display:none">
       ⚠️ 該日無開放點餐或菜單尚未設定，請洽管理者。
     </div>
@@ -314,21 +319,6 @@
 
   <!-- MENU TAB -->
   <div id="admin-menu-tab">
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-num" id="stat-items">0</div>
-        <div class="stat-label">所選日餐點數</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num" id="stat-orders">0</div>
-        <div class="stat-label">所選日訂單</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num" id="stat-revenue">$0</div>
-        <div class="stat-label">所選日營收</div>
-      </div>
-    </div>
-
     <div class="card">
       <div class="card-title">📤 上傳週菜單（CSV 格式）</div>
       <div class="upload-zone" id="upload-zone"
@@ -376,6 +366,29 @@
 
   <!-- ORDERS TAB -->
   <div id="admin-orders-tab" style="display:none">
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-num" id="stat-items">0</div>
+        <div class="stat-label">所選日餐點數</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num" id="stat-orders">0</div>
+        <div class="stat-label">所選日訂單</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num" id="stat-revenue">$0</div>
+        <div class="stat-label">所選日營收</div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:14px;font-size:0.85rem;color:var(--text-soft);margin-bottom:14px;padding:10px 14px;background:#fff;border-radius:10px;border:1px solid var(--border)">
+      <span>⏰ 每日點餐截止：<strong id="admin-info-cutoff" style="color:var(--primary)">12:00</strong></span>
+      <span style="color:var(--border)">|</span>
+      <span>📢 自動回報時間：<strong id="admin-info-report" style="color:var(--success)">12:00</strong></span>
+      <span style="color:var(--border)">|</span>
+      <span>🪑 座位總數：<strong id="admin-info-seats" style="color:var(--text)">30</strong> 席</span>
+    </div>
+
     <div class="card">
       <div class="section-header">
         <span class="card-title" style="margin:0">📋 訂單檢視</span>
@@ -401,7 +414,7 @@
     </div>
 
     <div class="card">
-      <div class="card-title">📊 餐點統計</div>
+      <div class="card-title">📊 餐點統計（有誰點）</div>
       <div id="meal-stats"></div>
     </div>
   </div>
@@ -595,6 +608,8 @@ function loadState() {
       }
     }
   } catch(e) {}
+  state.cutoffTime = cleanCloudTimeStr(state.cutoffTime);
+  state.reportTime = cleanCloudTimeStr(state.reportTime);
 }
 
 function saveState() {
@@ -663,6 +678,9 @@ function renderUserPage() {
   const hasMenu = activeMenu.length > 0;
   document.getElementById('user-menu-empty').style.display = hasMenu ? 'none' : 'flex';
   document.getElementById('user-form').style.display = hasMenu ? 'block' : 'none';
+
+  const userCutoff = document.getElementById('user-cutoff-display');
+  if (userCutoff) userCutoff.textContent = state.cutoffTime || '12:00';
 }
 
 document.addEventListener('change', function(e) {
@@ -743,11 +761,7 @@ function renderAdminPage() {
   renderMenuList();
   renderAdminOrders();
   renderMealStats();
-  document.getElementById('seat-count').value = state.seatCount;
-  document.getElementById('cutoff-time').value = state.cutoffTime;
-  document.getElementById('admin-email').value = state.adminEmail || '';
-  document.getElementById('report-time').value = state.reportTime || '12:00';
-  document.getElementById('google-sheet-url').value = state.googleSheetUrl || '';
+  populateSettingsUI();
 }
 
 function switchAdminTab(tab) {
@@ -796,8 +810,18 @@ function getFilteredOrders() {
 }
 
 function updateStats() {
-  const dayMenu = state.weeklyMenu[state.selectedAdminDay] || [];
-  document.getElementById('stat-items').textContent = dayMenu.length;
+  // 所選日餐點數：若選全部(0)，計算週一至週五全週餐點種類總數；否則計算該星期幾的餐點數
+  let menuCount = 0;
+  if (state.selectedAdminOrderDay === 0) {
+    [1, 2, 3, 4, 5].forEach(d => {
+      menuCount += (state.weeklyMenu[d] || []).length;
+    });
+  } else {
+    menuCount = (state.weeklyMenu[state.selectedAdminOrderDay] || []).length;
+  }
+  document.getElementById('stat-items').textContent = menuCount;
+
+  // 所選日訂單數與營收
   const filteredOrders = getFilteredOrders();
   document.getElementById('stat-orders').textContent = filteredOrders.length;
   document.getElementById('stat-revenue').textContent = '$' + filteredOrders.reduce((s, o) => s + o.price, 0);
@@ -848,13 +872,35 @@ function renderMealStats() {
   const el = document.getElementById('meal-stats');
   const filteredOrders = getFilteredOrders();
   if (filteredOrders.length === 0) { el.innerHTML = '<div class="alert alert-info">尚無資料</div>'; return; }
-  const counts = {};
-  filteredOrders.forEach(o => { counts[o.mealName] = (counts[o.mealName] || 0) + 1; });
-  el.innerHTML = Object.entries(counts).sort((a,b) => b[1]-a[1]).map(([name, cnt]) => `
-    <div class="menu-item">
-      <div class="menu-item-info"><div class="menu-item-name">${name}</div></div>
-      <div style="font-weight:700;color:var(--accent)">${cnt} 份</div>
-    </div>`).join('');
+  
+  // 統計每項餐點的數量與點餐座號
+  const stats = {};
+  filteredOrders.forEach(o => {
+    if (!stats[o.mealName]) {
+      stats[o.mealName] = { count: 0, seats: [] };
+    }
+    stats[o.mealName].count++;
+    if (!stats[o.mealName].seats.includes(o.seat)) {
+      stats[o.mealName].seats.push(o.seat);
+    }
+  });
+
+  // 座號升冪排序，並依被點次數排序
+  el.innerHTML = Object.entries(stats).sort((a,b) => b[1].count - a[1].count).map(([name, data]) => {
+    const seatsText = data.seats.sort((a, b) => a - b).join(', ');
+    return `
+    <div class="menu-item" style="padding: 12px 14px;">
+      <div class="menu-item-info">
+        <div class="menu-item-name" style="font-size: .95rem; font-weight: 600;">${name}</div>
+        <div style="font-size: .8rem; color: var(--text-soft); margin-top: 4px;">
+          👥 點餐座號：<span style="color: var(--accent); font-weight: 600;">${seatsText}</span>
+        </div>
+      </div>
+      <div style="font-weight: 700; color: var(--accent); font-size: 1rem; white-space: nowrap; margin-left: 12px;">
+        ${data.count} 份
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // ===================== CLOUD ORDER SYNC =====================
@@ -871,15 +917,30 @@ function cleanCloudDateStr(raw) {
 }
 
 function cleanCloudTimeStr(raw) {
-  if (!raw) return '';
+  if (!raw) return '12:00';
   const s = String(raw).trim();
-  if (s.includes('T')) {
-    const d = new Date(s);
-    if (!isNaN(d)) {
-      return d.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
-    }
+  // 格式 1: 標準 HH:mm (例如 12:00 或 9:30 或 12:00:00)
+  const matchSimple = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (matchSimple) {
+    const h = matchSimple[1].padStart(2, '0');
+    const m = matchSimple[2];
+    return `${h}:${m}`;
   }
-  return s;
+  // 格式 2: ISO 格式或 Date 字串
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    const h = String(d.getHours()).padStart(2, '0');
+    const m = String(d.getMinutes()).padStart(2, '0');
+    return `${h}:${m}`;
+  }
+  // 格式 3: 包含 HH:mm
+  const matchAny = s.match(/(\d{1,2}):(\d{2})/);
+  if (matchAny) {
+    const h = matchAny[1].padStart(2, '0');
+    const m = matchAny[2];
+    return `${h}:${m}`;
+  }
+  return '12:00';
 }
 
 async function syncOrdersFromCloud(isManual = false) {
@@ -898,9 +959,9 @@ async function syncOrdersFromCloud(isManual = false) {
     // 1. 同步雲端設定 (若存在)
     if (cloudSettings) {
       if (cloudSettings.seatCount) state.seatCount = Number(cloudSettings.seatCount);
-      if (cloudSettings.cutoffTime) state.cutoffTime = String(cloudSettings.cutoffTime);
+      if (cloudSettings.cutoffTime) state.cutoffTime = cleanCloudTimeStr(cloudSettings.cutoffTime);
       if (cloudSettings.adminEmail !== undefined) state.adminEmail = String(cloudSettings.adminEmail);
-      if (cloudSettings.reportTime) state.reportTime = String(cloudSettings.reportTime);
+      if (cloudSettings.reportTime) state.reportTime = cleanCloudTimeStr(cloudSettings.reportTime);
       if (cloudSettings.adminPassword) state.adminPassword = String(cloudSettings.adminPassword);
       populateSettingsUI();
     }
@@ -1050,18 +1111,19 @@ function saveAllSettings() {
   if (seat > 0) state.seatCount = seat;
   
   const cutoff = document.getElementById('cutoff-time').value;
-  if (cutoff) state.cutoffTime = cutoff;
+  if (cutoff) state.cutoffTime = cleanCloudTimeStr(cutoff);
 
   const email = document.getElementById('admin-email').value.trim();
   state.adminEmail = email;
 
   const reportTime = document.getElementById('report-time').value;
-  if (reportTime) state.reportTime = reportTime;
+  if (reportTime) state.reportTime = cleanCloudTimeStr(reportTime);
 
   const sheetUrl = document.getElementById('google-sheet-url').value.trim();
   state.googleSheetUrl = sheetUrl;
 
   saveState();
+  populateSettingsUI(); // 立即同步更新所有標籤與介面
   pushSettingsToCloud(); // 🚀 同步推送到 Google 試算表雲端
 
   // 顯示儲存成功提示
@@ -1130,9 +1192,17 @@ function sendReport() {
   const label = state.selectedAdminOrderDay === 0 ? "全部訂單" : DAY_NAMES[state.selectedAdminOrderDay];
   const total = filteredOrders.reduce((s, o) => s + o.price, 0);
   const counts = {};
-  filteredOrders.forEach(o => { counts[o.mealName] = (counts[o.mealName] || 0) + 1; });
+  const seats = {};
+  filteredOrders.forEach(o => {
+    counts[o.mealName] = (counts[o.mealName] || 0) + 1;
+    if (!seats[o.mealName]) seats[o.mealName] = [];
+    seats[o.mealName].push(o.seat);
+  });
   let report = `📋 點餐統計回報 (${label})\n總訂單：${filteredOrders.length} 筆\n總金額：$${total}\n\n── 餐點統計 ──\n`;
-  Object.entries(counts).sort((a,b) => b[1]-a[1]).forEach(([n, c]) => { report += `${n}：${c} 份\n`; });
+  Object.entries(counts).sort((a,b) => b[1]-a[1]).forEach(([n, c]) => {
+    const seatList = (seats[n] || []).sort((a,b) => a-b).join('、');
+    report += `${n} (${seatList}) ${c} 份\n`;
+  });
   report += `\n── 詳細訂單 ──\n`;
   filteredOrders.forEach(o => {
     report += `[${o.targetDateStr}] 座號${o.seat} ${o.mealName} $${o.price}\n`;
@@ -1336,20 +1406,36 @@ async function fetchOnlineMenu() {
 }
 
 function populateSettingsUI() {
+  state.cutoffTime = cleanCloudTimeStr(state.cutoffTime);
+  state.reportTime = cleanCloudTimeStr(state.reportTime);
+
   const seatEl = document.getElementById('seat-count');
   if (seatEl && state.seatCount) seatEl.value = state.seatCount;
 
   const cutoffEl = document.getElementById('cutoff-time');
-  if (cutoffEl && state.cutoffTime) cutoffEl.value = state.cutoffTime;
+  if (cutoffEl) cutoffEl.value = state.cutoffTime;
 
   const emailEl = document.getElementById('admin-email');
   if (emailEl && state.adminEmail !== undefined) emailEl.value = state.adminEmail;
 
   const reportEl = document.getElementById('report-time');
-  if (reportEl && state.reportTime) reportEl.value = state.reportTime;
+  if (reportEl) reportEl.value = state.reportTime;
 
   const sheetEl = document.getElementById('google-sheet-url');
   if (sheetEl && state.googleSheetUrl !== undefined) sheetEl.value = state.googleSheetUrl;
+
+  // 同步更新網頁各處的時間與座位資訊顯示
+  const userCutoff = document.getElementById('user-cutoff-display');
+  if (userCutoff) userCutoff.textContent = state.cutoffTime;
+
+  const adminCutoff = document.getElementById('admin-info-cutoff');
+  if (adminCutoff) adminCutoff.textContent = state.cutoffTime;
+
+  const adminReport = document.getElementById('admin-info-report');
+  if (adminReport) adminReport.textContent = state.reportTime;
+
+  const adminSeats = document.getElementById('admin-info-seats');
+  if (adminSeats) adminSeats.textContent = state.seatCount || 30;
 }
 
 // ===================== INIT =====================

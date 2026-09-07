@@ -21,6 +21,7 @@ function getSettingsMap() {
     sheet = ss.insertSheet(SHEET_SETTINGS);
     sheet.appendRow(["設定鍵值", "設定內容", "備註說明"]);
     sheet.setFrozenRows(1);
+    sheet.getRange("B:B").setNumberFormat("@");
     // 寫入預設值
     sheet.appendRow(["seatCount", "30", "座位數量"]);
     sheet.appendRow(["cutoffTime", "12:00", "每日點餐截止時間 (HH:mm)"]);
@@ -40,10 +41,16 @@ function getSettingsMap() {
 
   for (let i = 1; i < rows.length; i++) {
     const key = String(rows[i][0]).trim();
-    const val = String(rows[i][1]).trim();
-    if (key && val !== undefined) {
-      if (key === "seatCount") settings[key] = Number(val) || 30;
-      else settings[key] = val;
+    const rawVal = rows[i][1];
+    let val = String(rawVal).trim();
+    if (key && rawVal !== undefined) {
+      if (key === "seatCount") {
+        settings[key] = Number(val) || 30;
+      } else if (key === "cutoffTime" || key === "reportTime") {
+        settings[key] = normalizeTimeStr(rawVal) || "12:00";
+      } else {
+        settings[key] = val;
+      }
     }
   }
   return settings;
@@ -59,21 +66,29 @@ function saveSettingsToSheet(newSettings) {
     getSettingsMap();
     sheet = ss.getSheetByName(SHEET_SETTINGS);
   }
+  sheet.getRange("B:B").setNumberFormat("@");
 
   const rows = sheet.getDataRange().getValues();
   const keys = Object.keys(newSettings);
 
   for (const key of keys) {
+    let saveVal = String(newSettings[key]);
+    if (key === "cutoffTime" || key === "reportTime") {
+      saveVal = normalizeTimeStr(newSettings[key]) || "12:00";
+    }
     let found = false;
     for (let i = 1; i < rows.length; i++) {
       if (String(rows[i][0]).trim() === key) {
-        sheet.getRange(i + 1, 2).setValue(String(newSettings[key]));
+        const cell = sheet.getRange(i + 1, 2);
+        cell.setNumberFormat("@");
+        cell.setValue(saveVal);
         found = true;
         break;
       }
     }
     if (!found) {
-      sheet.appendRow([key, String(newSettings[key]), "自訂設定"]);
+      sheet.appendRow([key, saveVal, "自訂設定"]);
+      sheet.getRange(sheet.getLastRow(), 2).setNumberFormat("@");
     }
   }
 }
