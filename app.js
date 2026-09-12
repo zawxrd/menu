@@ -126,12 +126,14 @@ function doLogin() {
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 
 // ===================== USER PAGE =====================
-function getThisWeekMondayStr() {
-  const today = new Date();
-  const day = today.getDay(); // 0=日, 1=週一...6=週六
+function getThisWeekMondayStr(refDate) {
+  // refDate 可傳入特定日期；預設用今天
+  // 回傳該日期所在週的週一（ISO：週一為第一天）
+  const base = refDate ? new Date(refDate) : new Date();
+  const day = base.getDay(); // 0=日, 1=週一...6=週六
   const diff = day === 0 ? -6 : 1 - day; // 往前找週一
-  const monday = new Date(today);
-  monday.setDate(today.getDate() + diff);
+  const monday = new Date(base);
+  monday.setDate(base.getDate() + diff);
   const y = monday.getFullYear();
   const m = String(monday.getMonth() + 1).padStart(2, '0');
   const d = String(monday.getDate()).padStart(2, '0');
@@ -167,10 +169,10 @@ function renderUserPage() {
   }
 
   // ── 有效週驗證 ──
-  // 若菜單帶有 validWeekStart，且不屬於本週，視為「尚未開放」
-  const thisWeekMonday = getThisWeekMondayStr();
+  // 以「目標點餐日」所在週的週一為基準，避免週五截止後跨週誤判
+  const targetWeekMonday = getThisWeekMondayStr(new Date(target.dateStr));
   const menuWeekStart = state.menuValidWeekStart || '';
-  const menuExpired = menuWeekStart && menuWeekStart !== thisWeekMonday;
+  const menuExpired = menuWeekStart && menuWeekStart !== targetWeekMonday;
 
   const activeMenu = menuExpired ? [] : (state.weeklyMenu[target.dayOfWeek] || []);
   mealSel.innerHTML = '<option value="">-- 請選擇餐點 --</option>';
@@ -584,6 +586,7 @@ function addMenuItem() {
     name, price
   });
   state.menuUpdatedAt = Date.now();
+  state.menuValidWeekStart = getThisWeekMondayStr(new Date(getActiveTarget().dateStr));
   state.isManualMenu = true;
   saveState();
   closeModal('add-item-modal');
@@ -602,6 +605,7 @@ function editItem(id) {
   item.name = name.trim() || item.name;
   item.price = price;
   state.menuUpdatedAt = Date.now();
+  state.menuValidWeekStart = getThisWeekMondayStr(new Date(getActiveTarget().dateStr));
   state.isManualMenu = true;
   saveState();
   renderMenuList();
@@ -983,7 +987,8 @@ function parseCSVMenu(text, fileName, status) {
 
   state.menuUpdatedAt = Date.now();
   state.menuClearedAt = 0; // 重設清空標記，恢復正常顯示
-  state.menuValidWeekStart = getThisWeekMondayStr(); // 手動上傳菜單，有效週設為本週
+  // 有效週對齊「目標點餐日」所在週，週五截止後上傳菜單會正確對到下週一
+  state.menuValidWeekStart = getThisWeekMondayStr(new Date(getActiveTarget().dateStr));
   state.isManualMenu = true; // 鎖定保護：手動修改/上傳後，不受線上舊檔案影響
   saveState();
   renderMenuList();
