@@ -1,4 +1,3 @@
-
 const DAY_NAMES = { 1: '週一', 2: '週二', 3: '週三', 4: '週四', 5: '週五' };
 
 function getDefaultWeekday() {
@@ -32,17 +31,19 @@ function getActiveTarget() {
   const cutoff = new Date();
   cutoff.setHours(h, m, 0, 0);
 
-  let targetDate = new Date();
-  let isTomorrow = false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
+  let targetDate = new Date();
+
+  // 若已過截止時間，從明天開始找
   if (now > cutoff) {
     targetDate.setDate(targetDate.getDate() + 1);
-    isTomorrow = true;
   }
 
+  // 跳過週六、週日，找到最近的工作日
   while (targetDate.getDay() === 0 || targetDate.getDay() === 6) {
     targetDate.setDate(targetDate.getDate() + 1);
-    if (targetDate.getDay() === 1) isTomorrow = true;
   }
 
   const year = targetDate.getFullYear();
@@ -50,6 +51,11 @@ function getActiveTarget() {
   const day = String(targetDate.getDate()).padStart(2, '0');
   const dateStr = `${year}-${month}-${day}`;
   const dayOfWeek = targetDate.getDay();
+
+  // isTomorrow：targetDate 不是今天就代表是「預訂未來」
+  const targetDay = new Date(targetDate);
+  targetDay.setHours(0, 0, 0, 0);
+  const isTomorrow = targetDay.getTime() !== today.getTime();
 
   return { dateStr, dayOfWeek, isTomorrow, dayName: DAY_NAMES[dayOfWeek] };
 }
@@ -139,9 +145,16 @@ function renderUserPage() {
 
   const badge = document.getElementById('order-target-badge');
   if (target.isTomorrow) {
-    badge.textContent = `預訂明日 (${target.dayName} ${target.dateStr})`;
+    // 判斷是否跨週（週五截止後預訂下週一的情況）
+    const isNextMonday = target.dayOfWeek === 1;
+    const label = isNextMonday
+      ? `預訂下週一 (${target.dateStr})`
+      : `預訂明日 (${target.dayName} ${target.dateStr})`;
+    badge.textContent = label;
     badge.className = 'chip chip-warn';
-    document.getElementById('user-order-title').textContent = `📋 預訂餐點 (${target.dayName} ${target.dateStr})`;
+    document.getElementById('user-order-title').textContent = isNextMonday
+      ? `📋 預訂下週一餐點 (${target.dateStr})`
+      : `📋 預訂餐點 (${target.dayName} ${target.dateStr})`;
   } else {
     badge.textContent = `開放今日 (${target.dayName} ${target.dateStr})`;
     badge.className = 'chip chip-success';
@@ -1112,4 +1125,3 @@ syncOrdersFromCloud(false); // 🚀 每次進入網頁自動在背景載入雲�
 setInterval(() => {
   if (state.currentPage === 'user') renderUserPage();
 }, 60000);
-
