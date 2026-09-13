@@ -11,5 +11,5 @@
  */
 window.DEFAULT_CONFIG = {
   // Google 試算表 Web App 網址 (必填，例如：https://script.google.com/macros/s/.../exec)
-  googleSheetUrl: ""
+  googleSheetUrl: "https://script.google.com/macros/s/AKfycbxEkSd-KXP8KcYNS4-F7HMtGw6O0MGFlxeyjTZqY1k0qJzPJFZOZBziLVg9QA4LwGOA/exec"
 };
